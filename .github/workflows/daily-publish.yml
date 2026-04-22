@@ -1,0 +1,99 @@
+name: Daily Publish
+
+on:
+  schedule:
+    # 06:00 SGT preview drop (22:00 UTC previous day)
+    - cron: '0 22 * * *'
+    # 08:00 SGT live publish (00:00 UTC)
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Publishing mode'
+        required: true
+        default: 'dry-run'
+        type: choice
+        options:
+          - dry-run
+          - preview-only
+          - publish
+      date:
+        description: 'Drop date (YYYY-MM-DD), defaults to today'
+        required: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        run: npm install --production
+
+      - name: Pull latest content drop from content-engine
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          DATE="${{ github.event.inputs.date || '' }}"
+          [ -z "$DATE" ] && DATE=$(TZ=Asia/Singapore date +%Y-%m-%d)
+          echo "DROP_DATE=$DATE" >> $GITHUB_ENV
+          mkdir -p drops/$DATE
+
+          # Primary: pull from content-engine repo's output/ folder (committed by content-engine workflow).
+          # This is the same source jsDelivr serves, so what publisher sees == what FB/Threads/IG fetch.
+          BASE="https://raw.githubusercontent.com/farhanadenan/povguy-content-engine/main/output/$DATE"
+          MANIFEST_URL="$BASE/manifest.json"
+          if curl -sf -H "Authorization: token $GH_TOKEN" -o drops/$DATE/manifest.json "$MANIFEST_URL"; then
+            echo "[publisher] pulling drop from content-engine repo @ output/$DATE/"
+            SLIDE_COUNT=$(jq -r '.slide_count' drops/$DATE/manifest.json)
+            curl -sf -H "Authorization: token $GH_TOKEN" -o drops/$DATE/caption.txt "$BASE/caption.txt"
+            for i in $(seq 1 "$SLIDE_COUNT"); do
+              curl -sf -H "Authorization: token $GH_TOKEN" -o "drops/$DATE/slide-$i.png" "$BASE/slide-$i.png"
+            done
+          else
+            # Fallback: artifact download (legacy path, useful if content-engine push step failed)
+            echo "[publisher] no committed drop — falling back to artifact download"
+            gh api repos/farhanadenan/povguy-content-engine/actions/artifacts \
+              --jq ".artifacts[] | select(.name == \"drop-$DATE\") | .archive_download_url" \
+              | head -1 | xargs -I{} curl -L -H "Authorization: token $GH_TOKEN" -o drops/$DATE.zip {}
+            unzip -o drops/$DATE.zip -d drops/$DATE
+          fi
+          ls -la drops/$DATE/
+
+      - name: Determine mode from cron schedule
+        id: mode
+        run: |
+          MODE="${{ github.event.inputs.mode || '' }}"
+          if [ -z "$MODE" ]; then
+            HOUR=$(date -u +%H)
+            if [ "$HOUR" = "22" ]; then MODE="preview-only"
+            elif [ "$HOUR" = "00" ]; then MODE="publish"
+            else MODE="dry-run"; fi
+          fi
+          echo "mode=$MODE" >> $GITHUB_OUTPUT
+
+      - name: Run publisher
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_MAIN_CHAT_ID: ${{ secrets.TELEGRAM_MAIN_CHAT_ID }}
+          TELEGRAM_STAGING_CHAT_ID: ${{ secrets.TELEGRAM_STAGING_CHAT_ID }}
+          META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+          META_PAGE_ID: ${{ secrets.META_PAGE_ID }}
+          META_INSTAGRAM_BUSINESS_ID: ${{ secrets.META_INSTAGRAM_BUSINESS_ID }}
+          META_THREADS_USER_ID: ${{ secrets.META_THREADS_USER_ID }}
+          META_APP_ID: ${{ secrets.META_APP_ID }}
+          META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+          ENABLE_INSTAGRAM_LIVE: ${{ secrets.ENABLE_INSTAGRAM_LIVE }}
+          CONTENT_DROP_DIR: ./drops
+        run: node src/index.js --${{ steps.mode.outputs.mode }} --date $DROP_DATE
+
+      - name: Upload publish results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-result-${{ env.DROP_DATE }}-${{ steps.mode.outputs.mode }}
+          path: drops/${{ env.DROP_DATE }}/{publish-result,preview-state}.json
+          if-no-files-found: ignore
