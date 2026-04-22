@@ -2,10 +2,10 @@ name: Daily Publish
 
 on:
   schedule:
-    # 06:00 SGT preview drop (22:00 UTC previous day)
-    - cron: '0 22 * * *'
-    # 08:00 SGT live publish (00:00 UTC)
-    - cron: '0 0 * * *'
+    # 18:00 SGT preview drop (10:00 UTC same day) — silent-veto window opens
+    - cron: '0 10 * * *'
+    # 10:00 SGT next-day live publish (02:00 UTC) — publishes YESTERDAY-SGT's drop
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -38,12 +38,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           DATE="${{ github.event.inputs.date || '' }}"
-          [ -z "$DATE" ] && DATE=$(TZ=Asia/Singapore date +%Y-%m-%d)
+          if [ -z "$DATE" ]; then
+            HOUR_UTC=$(date -u +%H)
+            if [ "$HOUR_UTC" = "02" ]; then
+              # 02:00 UTC = 10:00 SGT publish cron — publish YESTERDAY-SGT's drop
+              # (the one that was previewed at 18:00 SGT the previous evening)
+              DATE=$(TZ=Asia/Singapore date -d 'yesterday' +%Y-%m-%d)
+            else
+              # Preview cron (10:00 UTC = 18:00 SGT) or manual run — today SGT
+              DATE=$(TZ=Asia/Singapore date +%Y-%m-%d)
+            fi
+          fi
           echo "DROP_DATE=$DATE" >> $GITHUB_ENV
           mkdir -p drops/$DATE
 
-          # Primary: pull from content-engine repo's output/ folder (committed by content-engine workflow).
-          # This is the same source jsDelivr serves, so what publisher sees == what FB/Threads/IG fetch.
           BASE="https://raw.githubusercontent.com/farhanadenan/povguy-content-engine/main/output/$DATE"
           MANIFEST_URL="$BASE/manifest.json"
           if curl -sf -H "Authorization: token $GH_TOKEN" -o drops/$DATE/manifest.json "$MANIFEST_URL"; then
@@ -54,7 +62,6 @@ jobs:
               curl -sf -H "Authorization: token $GH_TOKEN" -o "drops/$DATE/slide-$i.png" "$BASE/slide-$i.png"
             done
           else
-            # Fallback: artifact download (legacy path, useful if content-engine push step failed)
             echo "[publisher] no committed drop — falling back to artifact download"
             gh api repos/farhanadenan/povguy-content-engine/actions/artifacts \
               --jq ".artifacts[] | select(.name == \"drop-$DATE\") | .archive_download_url" \
@@ -69,8 +76,8 @@ jobs:
           MODE="${{ github.event.inputs.mode || '' }}"
           if [ -z "$MODE" ]; then
             HOUR=$(date -u +%H)
-            if [ "$HOUR" = "22" ]; then MODE="preview-only"
-            elif [ "$HOUR" = "00" ]; then MODE="publish"
+            if [ "$HOUR" = "10" ]; then MODE="preview-only"
+            elif [ "$HOUR" = "02" ]; then MODE="publish"
             else MODE="dry-run"; fi
           fi
           echo "mode=$MODE" >> $GITHUB_OUTPUT
