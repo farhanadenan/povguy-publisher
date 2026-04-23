@@ -59,13 +59,13 @@ jobs:
             echo "[publisher] pulling drop from content-engine repo @ output/$DATE/"
             SLIDE_COUNT=$(jq -r '.slide_count' drops/$DATE/manifest.json)
             curl -sf -H "Authorization: token $GH_TOKEN" -o drops/$DATE/caption.txt "$BASE/caption.txt"
-            # Zero-pad slide numbers (slide-01.png, slide-02.png, ...) to match the
-# renderer's output naming. The renderer pads so any downstream lex sort
-# stays in narrative order (slide-1, slide-10, slide-2 was the bug).
-for i in $(seq 1 "$SLIDE_COUNT"); do
-  num=$(printf "%02d" "$i")
-  curl -sf -H "Authorization: token $GH_TOKEN" -o "drops/$DATE/slide-$num.png" "$BASE/slide-$num.png"
-done
+           # Zero-pad slide numbers (slide-01.png, slide-02.png, ...) to match the
+            # renderer's output naming. The renderer pads so any downstream lex sort
+            # stays in narrative order (slide-1, slide-10, slide-2 was the bug).
+            for i in $(seq 1 "$SLIDE_COUNT"); do
+              num=$(printf "%02d" "$i")
+              curl -sf -H "Authorization: token $GH_TOKEN" -o "drops/$DATE/slide-$num.png" "$BASE/slide-$num.png"
+            done
           else
             echo "[publisher] no committed drop — falling back to artifact download"
             gh api repos/farhanadenan/povguy-content-engine/actions/artifacts \
