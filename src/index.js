@@ -47,9 +47,17 @@ if (!fs.existsSync(dropDir)) {
 
 const manifest = JSON.parse(fs.readFileSync(path.join(dropDir, 'manifest.json'), 'utf8'));
 const caption = fs.readFileSync(path.join(dropDir, 'caption.txt'), 'utf8');
+// Numeric sort by the digits in the filename — survives both legacy unpadded
+// names (slide-1.png … slide-10.png) AND new zero-padded names (slide-01.png …
+// slide-10.png). The bug we hit: alphabetical .sort() puts slide-10 second
+// because '1' < '2' lexicographically. With this comparator it's slot 10 always.
 const slidePaths = fs.readdirSync(dropDir)
   .filter(f => f.match(/^slide-\d+\.(png|jpg)$/))
-  .sort()
+  .sort((a, b) => {
+    const na = parseInt(a.match(/(\d+)/)[1], 10);
+    const nb = parseInt(b.match(/(\d+)/)[1], 10);
+    return na - nb;
+  })
   .map(f => path.join(dropDir, f));
 
 console.log(`[publisher] loaded drop ${manifest.drop_id}: ${slidePaths.length} slides, caption ${caption.length}ch`);
