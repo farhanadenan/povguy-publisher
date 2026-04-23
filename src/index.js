@@ -92,9 +92,13 @@ if (MODE === 'dry') {
 // --- Mode: preview ---
 if (MODE === 'preview') {
   const stagingId = process.env.TELEGRAM_STAGING_CHAT_ID;
+  // Publish time is 10:00 SGT next day (cron '0 2 * * *' = 02:00 UTC).
+  // Old schedule was 08:00 — kept failing to update the caption when the cron
+  // moved (Farhan, 2026-04-23). If the schedule changes again, audit BOTH
+  // daily-publish.yml AND this string in lockstep.
   const previewCaption =
     `🔬 PREVIEW · ${manifest.theme} · drop ${manifest.drop_id}\n` +
-    `Reply <b>KILL</b> to abort 08:00 publish.\n\n` +
+    `Reply <b>KILL</b> to abort 10:00 SGT publish.\n\n` +
     caption;
   const result = await tg.sendCarousel(stagingId, slidePaths, previewCaption);
   console.log(`[publisher] preview posted, first_message_id=${result.first_message_id}`);
