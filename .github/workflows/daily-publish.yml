@@ -86,7 +86,38 @@ jobs:
             else MODE="dry-run"; fi
           fi
           echo "mode=$MODE" >> $GITHUB_OUTPUT
+      - name: Restore preview-state from prior preview run
+        if: steps.mode.outputs.mode == 'publish'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -e
+          # The preview-state.json that records the kill-marker message ID is
+          # written on a different ephemeral runner during the 18:00 SGT preview.
+          # Without this step, the 10:00 SGT publish runner has no way to check
+          # if KILL was replied — it would either crash on missing file or fail
+          # safe and abort. Here we pull the most recent preview artifact so the
+          # publisher's kill check has the data it needs.
+          ARTIFACT_NAME="publish-result-${DROP_DATE}-preview-only"
+          echo "[publisher] looking for artifact: $ARTIFACT_NAME"
 
+          RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
+            --jq ".artifacts[] | select(.name == \"$ARTIFACT_NAME\" and .expired == false) | .workflow_run.id" \
+            | head -1)
+
+          if [ -z "$RUN_ID" ]; then
+            echo "[publisher] no preview artifact found for $DROP_DATE — publisher will fail-safe abort"
+            exit 0
+          fi
+
+          echo "[publisher] found preview artifact in run $RUN_ID — downloading"
+          mkdir -p drops/$DROP_DATE
+          gh run download "$RUN_ID" \
+            --repo ${{ github.repository }} \
+            --name "$ARTIFACT_NAME" \
+            --dir drops/$DROP_DATE/
+          ls -la drops/$DROP_DATE/
+          
       - name: Run publisher
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
