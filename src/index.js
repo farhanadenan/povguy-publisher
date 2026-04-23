@@ -114,11 +114,41 @@ if (MODE === 'preview') {
 // --- Mode: publish ---
 if (MODE === 'publish') {
   const stagingId = process.env.TELEGRAM_STAGING_CHAT_ID;
-  const previewState = JSON.parse(
-    fs.readFileSync(path.join(dropDir, 'preview-state.json'), 'utf8')
-  );
+  const previewStatePath = path.join(dropDir, 'preview-state.json');
 
-  const killed = await tg.wasKilled(stagingId, previewState.preview_message_id);
+  // preview-state.json is written by the PREVIEW run on a different ephemeral
+  // GitHub Actions runner. The publish runner starts fresh and the file isn't
+  // currently passed across runs (workflow lacks a download-artifact step).
+  // Fail SAFE: block publish rather than push without verifying kill status.
+  // To unblock: manually run daily-publish with mode=publish OR set
+  // SKIP_KILL_CHECK=true env var to publish without the kill check.
+  if (!fs.existsSync(previewStatePath)) {
+    if (process.env.SKIP_KILL_CHECK === 'true') {
+      console.warn(`[publisher] preview-state.json missing — SKIP_KILL_CHECK=true, publishing anyway`);
+    } else {
+      console.error(
+        `[publisher] BLOCKED: preview-state.json missing at ${previewStatePath}.\n` +
+        `  This file is written by the preview run and not currently passed to the publish run.\n` +
+        `  To publish manually: re-run this workflow with mode=publish AND override SKIP_KILL_CHECK=true,\n` +
+        `  OR run preview-only first on the same runner (rare) so state lands locally.\n` +
+        `  Architectural fix: add an actions/download-artifact step to daily-publish.yml.`
+      );
+      // Notify staging so Farhan sees the abort instead of finding silence.
+      try {
+        await tg.sendMessage(stagingId,
+          `⚠️ Drop ${manifest.drop_id}: publish ABORTED — kill-state file missing.\n` +
+          `Re-run daily-publish manually with mode=publish if you want it live.`
+        );
+      } catch {}
+      process.exit(1);
+    }
+  }
+
+  let killed = false;
+  if (fs.existsSync(previewStatePath)) {
+    const previewState = JSON.parse(fs.readFileSync(previewStatePath, 'utf8'));
+    killed = await tg.wasKilled(stagingId, previewState.preview_message_id);
+  }
   if (killed) {
     console.log(`[publisher] 🛑 kill marker detected — aborting publish for ${manifest.drop_id}`);
     await tg.sendMessage(stagingId, `🛑 Drop ${manifest.drop_id} killed. No publish.`);
